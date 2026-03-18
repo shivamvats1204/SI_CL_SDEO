@@ -1,76 +1,30 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
+# Virtual environment
 venv/
-env/
-ENV/
-.venv/
 
-# Environment variables
-.env
-.env.*
+# Python cache
+__pycache__/
+*.pyc
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
 
 # Logs
 *.log
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-pytest_cache/
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
-
-# PyCharm / VS Code
-.idea/
-.vscode/
-
-# Mac / Windows system files
+# OS files
 .DS_Store
 Thumbs.db
 
-# Mypy / type checker
-.mypy_cache/
+# Data (optional - if large)
+data/raw/
+data/processed/
 
-# Pyre
-.pyre/
+# Plots/images (optional)
+*.png
 
-# Ruff / lint cache
-.ruff_cache/
+# Build files
+dist/
+build/
 
-# Cython debug symbols
-cython_debug/
-
-# SQLite databases
-*.sqlite3
-
-# Temporary files
-*.swp
-*.tmp
+# Env files
+.env
