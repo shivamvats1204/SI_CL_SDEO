@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from time import perf_counter
-
 import numpy as np
 
 from .fitness import OptimizationResult, PlacementMetrics, build_fitness_context, evaluate_fitness
+from .timing import estimate_mbfoa_execution_time_ms
 
 
 def _empty_metrics() -> PlacementMetrics:
@@ -60,6 +59,7 @@ def _run_single_rf(
     block_size_mb: int,
     num_bacteria: int,
     max_iter: int,
+    failure_rate: float,
     seed: int | None,
 ) -> OptimizationResult:
     if not active_nodes or len(active_nodes) < replication_factor:
@@ -67,10 +67,9 @@ def _run_single_rf(
 
     population_size = max(6, num_bacteria)
     rng = np.random.default_rng(seed)
-    context = build_fitness_context(active_nodes, block_size_mb)
+    context = build_fitness_context(active_nodes, block_size_mb, failure_rate=failure_rate)
     search_upper_bound = max(1.0, len(active_nodes) - 1)
 
-    start_time = perf_counter()
     dimensions = replication_factor
     population = rng.uniform(0.0, search_upper_bound, size=(population_size, dimensions))
     step_size = 0.35
@@ -121,7 +120,15 @@ def _run_single_rf(
         convergence_curve.append(global_best_score)
 
     final_evaluation = evaluate_fitness(global_best, context)
-    execution_time_ms = (perf_counter() - start_time) * 1000.0
+    iterations_completed = max(1, len(convergence_curve) - 1)
+    execution_time_ms = estimate_mbfoa_execution_time_ms(
+        active_nodes=active_nodes,
+        replication_factor=replication_factor,
+        block_size_mb=block_size_mb,
+        population_size=population_size,
+        iterations_completed=iterations_completed,
+        failure_rate=failure_rate,
+    )
 
     return OptimizationResult(
         algorithm="MBFOA",
@@ -163,6 +170,7 @@ def optimize_mbfoa(
             block_size_mb=block_size_mb,
             num_bacteria=num_bacteria,
             max_iter=max_iter,
+            failure_rate=failure_rate,
             seed=None if seed is None else seed + offset,
         )
         selection_score = candidate_result.fitness + _rf_selection_penalty(

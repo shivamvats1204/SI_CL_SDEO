@@ -22,10 +22,10 @@ class DataNode:
 
     def get_current_latency(self) -> float:
         """Approximate latency under queueing and storage pressure."""
-        queue_penalty = 1.0 + (1.4 * self.current_load)
-        storage_penalty = 1.0 + (0.15 * (self.used_storage_gb / self.total_storage_gb))
-        bandwidth_bonus = 1.0 if self.bandwidth_gbps <= 1.0 else 0.92
-        return self.base_latency_ms * queue_penalty * storage_penalty * bandwidth_bonus
+        queue_penalty = 1.0 + (0.95 * self.current_load) + (1.25 * (self.current_load**2))
+        storage_penalty = 1.0 + (0.18 * (self.used_storage_gb / self.total_storage_gb))
+        bandwidth_factor = 1.03 if self.bandwidth_gbps <= 1.0 else 0.89
+        return self.base_latency_ms * queue_penalty * storage_penalty * bandwidth_factor
 
     def can_store_block(self, block_size_mb: int) -> bool:
         return self.free_storage_gb >= (block_size_mb / 1024.0)

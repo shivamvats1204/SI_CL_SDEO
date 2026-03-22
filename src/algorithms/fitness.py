@@ -26,9 +26,12 @@ class PlacementMetrics:
 class FitnessContext:
     active_nodes: tuple[DataNode, ...]
     block_size_mb: int
+    active_rack_count: int
     cluster_avg_availability: float
+    cluster_avg_load: float
     cluster_total_bandwidth_gbps: float
     latency_reference_ms: float
+    failure_rate: float
     weights: tuple[float, float] = (0.7, 0.3)
 
 
@@ -53,23 +56,33 @@ class OptimizationResult:
 def build_fitness_context(
     active_nodes: Sequence[DataNode],
     block_size_mb: int,
+    failure_rate: float = 0.01,
     weights: tuple[float, float] = (0.7, 0.3),
 ) -> FitnessContext:
     nodes = tuple(active_nodes)
     if not nodes:
         raise ValueError("active_nodes must not be empty")
 
+    active_rack_count = len({node.rack_id for node in nodes})
     cluster_avg_availability = float(np.mean([node.availability for node in nodes]))
+    cluster_avg_load = float(np.mean([node.current_load for node in nodes]))
     cluster_total_bandwidth = float(sum(node.bandwidth_gbps for node in nodes))
     average_latency = float(np.mean([node.get_current_latency() for node in nodes]))
-    latency_reference = average_latency + calculate_awl(nodes[: min(3, len(nodes))], block_size_mb)
+    latency_reference = average_latency + calculate_awl(
+        nodes[: min(3, len(nodes))],
+        block_size_mb,
+        active_rack_count=active_rack_count,
+    )
 
     return FitnessContext(
         active_nodes=nodes,
         block_size_mb=block_size_mb,
+        active_rack_count=active_rack_count,
         cluster_avg_availability=cluster_avg_availability,
+        cluster_avg_load=cluster_avg_load,
         cluster_total_bandwidth_gbps=max(10.0, cluster_total_bandwidth),
         latency_reference_ms=max(1.0, latency_reference),
+        failure_rate=failure_rate,
         weights=weights,
     )
 
@@ -107,14 +120,34 @@ def decode_solution(solution_vector: Sequence[float], context: FitnessContext) -
 
 
 def compute_placement_metrics(selected_nodes: Sequence[DataNode], context: FitnessContext) -> PlacementMetrics:
-    average_read_latency = calculate_arl(selected_nodes)
-    average_write_latency = calculate_awl(selected_nodes, context.block_size_mb)
+    average_read_latency = calculate_arl(selected_nodes, active_rack_count=context.active_rack_count)
+    average_write_latency = calculate_awl(
+        selected_nodes,
+        context.block_size_mb,
+        active_rack_count=context.active_rack_count,
+    )
     composite_latency = (0.4 * average_read_latency) + (0.6 * average_write_latency)
-    data_availability = calculate_da(selected_nodes)
-    fault_tolerance = calculate_fault_tolerance(selected_nodes, context.cluster_avg_availability)
-    packet_delivery_ratio = calculate_pdr(selected_nodes)
+    data_availability = calculate_da(
+        selected_nodes,
+        active_rack_count=context.active_rack_count,
+        cluster_avg_availability=context.cluster_avg_availability,
+        cluster_avg_load=context.cluster_avg_load,
+        failure_rate=context.failure_rate,
+    )
+    fault_tolerance = calculate_fault_tolerance(
+        selected_nodes,
+        context.cluster_avg_availability,
+        active_rack_count=context.active_rack_count,
+    )
+    packet_delivery_ratio = calculate_pdr(
+        selected_nodes,
+        active_rack_count=context.active_rack_count,
+        cluster_avg_load=context.cluster_avg_load,
+        failure_rate=context.failure_rate,
+    )
     network_utilization = calculate_network_utilization(
         selected_nodes,
+        active_rack_count=context.active_rack_count,
         block_size_mb=context.block_size_mb,
         max_cluster_bandwidth_gbps=context.cluster_total_bandwidth_gbps,
     )

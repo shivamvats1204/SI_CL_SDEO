@@ -65,9 +65,9 @@ def test_select_blocks_for_simulation_spans_dataset():
 
 
 def test_default_sampled_block_count_scales_with_dataset():
-    assert main.default_sampled_block_count("Low", 800) == 18
-    assert main.default_sampled_block_count("Medium", 4000) == 28
-    assert main.default_sampled_block_count("High", 8000) == 40
+    assert main.default_sampled_block_count("Low", 800) == 8
+    assert main.default_sampled_block_count("Medium", 4000) == 11
+    assert main.default_sampled_block_count("High", 8000) == 14
 
 
 def test_save_results_persists_only_simulation_fields(tmp_path, monkeypatch):
@@ -78,7 +78,8 @@ def test_save_results_persists_only_simulation_fields(tmp_path, monkeypatch):
     rack_sweep = (np.array([2, 4]), {2: [99.1, 99.2]}, {2: [68.4, 69.2]})
     metric_summaries = {
         "fault_tolerance": {2: _summary(fault_tolerance_pct=82.5)},
-        "latency": {2: _summary(average_read_latency_ms=12.3, average_write_latency_ms=34.5)},
+        "read_latency": {2: _summary(average_read_latency_ms=12.3)},
+        "write_latency": {2: _summary(average_write_latency_ms=34.5)},
         "network": {2: _summary(network_utilization_pct=44.4)},
     }
 
@@ -86,7 +87,7 @@ def test_save_results_persists_only_simulation_fields(tmp_path, monkeypatch):
 
     payload = json.loads(results_path.read_text(encoding="utf-8"))
     execution_summary = payload["execution_time_experiment"]["SI-CL-SDEO"][0]
-    metric_summary = payload["replication_factor_metrics"]["latency"]["2"]
+    metric_summary = payload["replication_factor_metrics"]["read_latency"]["2"]
 
     assert execution_summary["optimizer_time_ms"] == 321.0
     assert execution_summary["dataset_block_count"] == 0
@@ -100,10 +101,15 @@ def test_print_summary_uses_simulation_values(capsys):
     execution_results = {"SI-CL-SDEO": [_summary(load_condition="Low", optimizer_time_ms=321.0)]}
     metric_summaries = {
         "fault_tolerance": {2: _summary(fault_tolerance_pct=82.5), 3: _summary(fault_tolerance_pct=86.4), 4: _summary(fault_tolerance_pct=88.1)},
-        "latency": {
-            2: _summary(average_read_latency_ms=12.3, average_write_latency_ms=34.5),
-            3: _summary(average_read_latency_ms=15.6, average_write_latency_ms=48.7),
-            4: _summary(average_read_latency_ms=18.9, average_write_latency_ms=62.1),
+        "read_latency": {
+            2: _summary(average_read_latency_ms=12.3),
+            3: _summary(average_read_latency_ms=15.6),
+            4: _summary(average_read_latency_ms=18.9),
+        },
+        "write_latency": {
+            2: _summary(average_write_latency_ms=34.5),
+            3: _summary(average_write_latency_ms=48.7),
+            4: _summary(average_write_latency_ms=62.1),
         },
         "network": {
             2: _summary(network_utilization_pct=44.4),

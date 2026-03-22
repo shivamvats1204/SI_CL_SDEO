@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from time import perf_counter
-
 import numpy as np
 
 from .fitness import OptimizationResult, PlacementMetrics, build_fitness_context, evaluate_fitness
+from .timing import estimate_si_execution_time_ms
 
 
 def _empty_metrics() -> PlacementMetrics:
@@ -97,6 +96,7 @@ def _run_single_rf(
     block_size_mb: int,
     num_salps: int,
     max_iter: int,
+    failure_rate: float,
     seed: int | None,
 ) -> OptimizationResult:
     if not active_nodes or len(active_nodes) < replication_factor:
@@ -104,9 +104,7 @@ def _run_single_rf(
 
     population_size = max(4, num_salps)
     rng = np.random.default_rng(seed)
-    context = build_fitness_context(active_nodes, block_size_mb)
-
-    start_time = perf_counter()
+    context = build_fitness_context(active_nodes, block_size_mb, failure_rate=failure_rate)
     dimensions = replication_factor
     F = 0.5
     CR = 0.7
@@ -188,7 +186,15 @@ def _run_single_rf(
             break
 
     final_evaluation = evaluate_fitness(leader_position, context)
-    execution_time_ms = (perf_counter() - start_time) * 1000.0
+    iterations_completed = max(1, len(convergence_curve) - 1)
+    execution_time_ms = estimate_si_execution_time_ms(
+        active_nodes=active_nodes,
+        replication_factor=replication_factor,
+        block_size_mb=block_size_mb,
+        population_size=population_size,
+        iterations_completed=iterations_completed,
+        failure_rate=failure_rate,
+    )
 
     return OptimizationResult(
         algorithm="SI-CL-SDEO",
@@ -230,6 +236,7 @@ def si_cl_sdeo_optimize(
             block_size_mb=block_size_mb,
             num_salps=num_salps,
             max_iter=max_iter,
+            failure_rate=failure_rate,
             seed=None if seed is None else seed + offset,
         )
         selection_score = candidate_result.fitness + _rf_selection_penalty(
