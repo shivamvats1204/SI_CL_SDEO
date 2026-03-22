@@ -1,42 +1,50 @@
-# src/metrics/availability.py
+from __future__ import annotations
+
+from typing import Sequence
 
 import numpy as np
 
-def calculate_da(selected_nodes):
-    """
-    Data Availability (DA) Percentage.
-    Probabilistically, data is available if AT LEAST ONE replica is online.
-    Formula: P(available) = 1 - P(all replicas fail)
-    """
-    if not selected_nodes:
-        return 0.0
-        
-    p_all_fail = 1.0
-    for node in selected_nodes:
-        # Probability that this specific node fails
-        p_fail = 1.0 - node.availability
-        p_all_fail *= p_fail
-        
-    da_percentage = (1.0 - p_all_fail) * 100.0
-    return min(100.0, da_percentage)
+from src.hdfs_env.datanode import DataNode
 
-def calculate_fault_tolerance(selected_nodes, cluster_avg_availability):
+
+def calculate_da(selected_nodes: Sequence[DataNode]) -> float:
     """
-    Fault Tolerance.
-    Measures resilience against node failures. Higher replication provides 
-    higher baseline tolerance, scaled by the actual reliability of the chosen nodes.
+    Data availability for a replicated block.
+    The block remains available if at least one replica remains reachable.
     """
     if not selected_nodes:
         return 0.0
-        
-    rf = len(selected_nodes)
-    
-    # Baseline theoretical fault tolerance based on RF
-    # RF=2 -> ~50%, RF=3 -> ~75%, RF=4 -> ~87.5%
-    theoretical_ft = (1.0 - (1.0 / (2 ** (rf - 1)))) * 100.0
-    
-    # Scale it by how healthy the selected nodes are compared to the cluster average
-    node_health_factor = np.mean([node.availability for node in selected_nodes]) / cluster_avg_availability
-    
-    actual_ft = theoretical_ft * node_health_factor
-    return min(100.0, actual_ft)
+
+    probability_all_replicas_unavailable = 1.0
+    for node in selected_nodes:
+        effective_uptime = node.availability * (1.0 - (node.current_load * 0.08))
+        effective_uptime = min(0.999, max(0.01, effective_uptime))
+        probability_all_replicas_unavailable *= (1.0 - effective_uptime)
+
+    return min(100.0, max(0.0, (1.0 - probability_all_replicas_unavailable) * 100.0))
+
+
+def calculate_fault_tolerance(selected_nodes: Sequence[DataNode], cluster_avg_availability: float) -> float:
+    """
+    Resilience score for the selected replica set.
+    The score rewards extra replicas and rack diversity while applying a modest
+    synchronization penalty to large replica pipelines.
+    """
+    if not selected_nodes:
+        return 0.0
+
+    if cluster_avg_availability <= 0.0:
+        raise ValueError("cluster_avg_availability must be greater than zero")
+
+    replication_factor = len(selected_nodes)
+    distinct_racks = len({node.rack_id for node in selected_nodes})
+    rack_diversity = distinct_racks / replication_factor
+    health_factor = np.mean([node.availability for node in selected_nodes]) / cluster_avg_availability
+    base_score = 38.0 + (11.0 * replication_factor)
+    redundancy_bonus = 5.5 * np.log2(replication_factor)
+    rack_bonus = 8.0 * rack_diversity
+    health_scale = min(1.08, max(0.92, health_factor))
+    synchronization_penalty = 1.5 * max(0, replication_factor - 2)
+
+    score = ((base_score + redundancy_bonus + rack_bonus) * health_scale) - synchronization_penalty
+    return min(100.0, max(0.0, score))

@@ -1,30 +1,54 @@
-import random
+from __future__ import annotations
 
+from dataclasses import dataclass
+
+
+@dataclass
 class DataNode:
-    def __init__(self, node_id, rack_id):
-        self.node_id = node_id
-        self.rack_id = rack_id
-        
-        # Simulated Hardware & Network Metrics
-        self.total_storage_gb = 1000.0  # 1 TB SSD as per the paper 
-        self.used_storage_gb = random.uniform(50.0, 500.0)
-        
-        # Base latency (ms) with some randomness to simulate network jitter
-        self.base_latency = random.uniform(5.0, 20.0) 
-        
-        # Availability (Uptime percentage)
-        self.availability = random.uniform(0.85, 0.99)
-        
-        # Current load (0.0 to 1.0)
-        self.current_load = random.uniform(0.1, 0.8)
+    """Simplified HDFS DataNode model used by the placement simulation."""
 
-    def get_current_latency(self):
-        """Calculates latency penalized by current load"""
-        return self.base_latency * (1.0 + self.current_load)
+    node_id: int
+    rack_id: int
+    total_storage_gb: float
+    used_storage_gb: float
+    base_latency_ms: float
+    bandwidth_gbps: float
+    availability: float
+    current_load: float
 
-    def is_alive(self, failure_rate):
-        """Simulates node failure based on the given failure rate (e.g., 0.01 for 1%)"""
-        return random.random() > failure_rate
+    @property
+    def free_storage_gb(self) -> float:
+        return max(0.0, self.total_storage_gb - self.used_storage_gb)
 
-    def __repr__(self):
-        return f"DataNode(id={self.node_id}, rack={self.rack_id}, load={self.current_load:.2f})"
+    def get_current_latency(self) -> float:
+        """Approximate latency under queueing and storage pressure."""
+        queue_penalty = 1.0 + (1.4 * self.current_load)
+        storage_penalty = 1.0 + (0.15 * (self.used_storage_gb / self.total_storage_gb))
+        bandwidth_bonus = 1.0 if self.bandwidth_gbps <= 1.0 else 0.92
+        return self.base_latency_ms * queue_penalty * storage_penalty * bandwidth_bonus
+
+    def can_store_block(self, block_size_mb: int) -> bool:
+        return self.free_storage_gb >= (block_size_mb / 1024.0)
+
+    def is_alive(self, failure_rate: float, random_value: float) -> bool:
+        """Failure probability rises under load and with weaker baseline uptime."""
+        effective_failure_rate = failure_rate
+        effective_failure_rate += (1.0 - self.availability) * 0.35
+        effective_failure_rate += self.current_load * 0.08
+        return random_value > min(0.99, max(0.0, effective_failure_rate))
+
+    def apply_block_write(self, block_size_mb: int) -> None:
+        block_size_gb = block_size_mb / 1024.0
+        self.used_storage_gb = min(self.total_storage_gb, self.used_storage_gb + block_size_gb)
+        write_pressure = 0.02 * (block_size_mb / 128.0)
+        self.current_load = min(1.0, self.current_load + write_pressure)
+
+    def cool_down(self, amount: float) -> None:
+        self.current_load = max(0.02, self.current_load - amount)
+
+    def __repr__(self) -> str:
+        return (
+            "DataNode("
+            f"id={self.node_id}, rack={self.rack_id}, "
+            f"load={self.current_load:.2f}, avail={self.availability:.3f})"
+        )
