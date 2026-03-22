@@ -290,6 +290,48 @@ def run_execution_time_experiment() -> dict[str, list[ExperimentSummary]]:
     return execution_results
 
 
+def run_comparative_performance_experiment() -> dict[str, list[ExperimentSummary]]:
+    trial_count = 3
+    comparison_results = {"SI-CL-SDEO": [], "MBFOA": []}
+
+    for load_index, (load_name, scenario) in enumerate(SCENARIOS.items(), start=1):
+        si_trials: list[ExperimentSummary] = []
+        mbfoa_trials: list[ExperimentSummary] = []
+
+        for trial in range(trial_count):
+            base_seed = 9000 + (1000 * load_index) + (150 * trial)
+            common_kwargs = {
+                "num_nodes": 50,
+                "num_racks": 10,
+                "fixed_replication_factor": None,
+                "cluster_seed": base_seed,
+                "workload_seed": base_seed + 1,
+                "optimizer_seed": base_seed + 10,
+                "placement_request_limit": 12,
+            }
+            si_trials.append(
+                run_algorithm_simulation(
+                    si_cl_sdeo_optimize,
+                    "SI-CL-SDEO",
+                    scenario,
+                    **common_kwargs,
+                )
+            )
+            mbfoa_trials.append(
+                run_algorithm_simulation(
+                    optimize_mbfoa,
+                    "MBFOA",
+                    scenario,
+                    **common_kwargs,
+                )
+            )
+
+        comparison_results["SI-CL-SDEO"].append(average_summaries(si_trials))
+        comparison_results["MBFOA"].append(average_summaries(mbfoa_trials))
+
+    return comparison_results
+
+
 def run_dataset_size_execution_profiles() -> tuple[np.ndarray, dict[str, dict[int, list[float]]]]:
     dataset_sizes = np.arange(10, 160, 10)
     execution_profiles = {
@@ -625,45 +667,47 @@ def plot_time_complexity(
 
 
 def build_comparative_performance_scores(
-    execution_results: dict[str, list[ExperimentSummary]],
+    comparison_results: dict[str, list[ExperimentSummary]],
 ) -> dict[str, dict[str, list[float]]]:
-    methods = list(execution_results.keys())
-    metric_extractors = {
-        "Network Traffic": lambda summary: summary.network_utilization_pct,
-        "Read Latency": lambda summary: summary.average_read_latency_ms,
-        "Write Latency": lambda summary: summary.average_write_latency_ms,
-        "Network Failures": lambda summary: 100.0 - summary.packet_delivery_ratio_pct,
-        "Fault Tolerance": lambda summary: summary.fault_tolerance_pct,
+    methods = list(comparison_results.keys())
+    metric_specs = {
+        "Network Traffic": (lambda summary: summary.network_utilization_pct, False, 40.0, 58.0),
+        "Read Latency": (lambda summary: summary.average_read_latency_ms, False, 180.0, 340.0),
+        "Write Latency": (lambda summary: summary.average_write_latency_ms, False, 120.0, 460.0),
+        "Network Failures": (lambda summary: 100.0 - summary.packet_delivery_ratio_pct, False, 0.0, 30.0),
+        "Fault Tolerance": (lambda summary: summary.fault_tolerance_pct, True, 60.0, 85.0),
     }
-    lower_is_better = {"Network Traffic", "Read Latency", "Write Latency", "Network Failures"}
     scores: dict[str, dict[str, list[float]]] = {}
 
     for load_name in SCENARIOS:
         load_summaries = {
             method: next(summary for summary in summaries if summary.load_condition == load_name)
-            for method, summaries in execution_results.items()
+            for method, summaries in comparison_results.items()
         }
         load_scores: dict[str, list[float]] = {}
-        for metric_name, extractor in metric_extractors.items():
+        for metric_name, (extractor, higher_is_better, lower_bound, upper_bound) in metric_specs.items():
             raw_values = [extractor(load_summaries[method]) for method in methods]
-            if metric_name in lower_is_better:
-                baseline = max(1e-6, min(raw_values))
-                load_scores[metric_name] = [100.0 * baseline / max(value, 1e-6) for value in raw_values]
-            else:
-                baseline = max(raw_values)
-                load_scores[metric_name] = [0.0 if baseline <= 0.0 else 100.0 * value / baseline for value in raw_values]
+            scale_width = max(1e-6, upper_bound - lower_bound)
+            normalized_values: list[float] = []
+            for value in raw_values:
+                if higher_is_better:
+                    normalized = 100.0 * (value - lower_bound) / scale_width
+                else:
+                    normalized = 100.0 * (upper_bound - value) / scale_width
+                normalized_values.append(float(min(100.0, max(0.0, normalized))))
+            load_scores[metric_name] = normalized_values
         scores[load_name] = load_scores
 
     return scores
 
 
 def plot_comparative_performance_bars(
-    execution_results: dict[str, list[ExperimentSummary]],
+    comparison_results: dict[str, list[ExperimentSummary]],
 ) -> dict[str, dict[str, list[float]]]:
-    methods = list(execution_results.keys())
-    scores = build_comparative_performance_scores(execution_results)
+    methods = list(comparison_results.keys())
+    scores = build_comparative_performance_scores(comparison_results)
     categories = ["Network Traffic", "Read Latency", "Write Latency", "Network Failures", "Fault Tolerance"]
-    colors = ["#fdba74", "#86c97c", "#c4b5fd", "#fef08a", "#93b5e8"]
+    method_colors = {"SI-CL-SDEO": "#1f5aa6", "MBFOA": "#c0392b"}
     figure_specs = [
         ("Low", LOW_LOAD_PERFORMANCE_FIGURE),
         ("Medium", MEDIUM_LOAD_PERFORMANCE_FIGURE),
@@ -671,26 +715,37 @@ def plot_comparative_performance_bars(
     ]
 
     for load_name, figure_path in figure_specs:
-        fig, ax = plt.subplots(figsize=(9, 6))
-        x_positions = np.arange(len(methods))
-        width = 0.15
-        offsets = np.linspace(-2, 2, num=len(categories)) * width
+        fig, ax = plt.subplots(figsize=(10, 6))
+        x_positions = np.arange(len(categories))
+        width = 0.34
+        method_offsets = np.linspace(-0.5, 0.5, num=len(methods)) * width
 
-        for offset, category, color in zip(offsets, categories, colors):
-            ax.bar(
-                x_positions + offset,
-                scores[load_name][category],
+        for method_index, method_name in enumerate(methods):
+            heights = [scores[load_name][category][method_index] for category in categories]
+            bars = ax.bar(
+                x_positions + method_offsets[method_index],
+                heights,
                 width=width,
-                color=color,
-                edgecolor="#555555",
+                color=method_colors[method_name],
+                edgecolor="#444444",
                 linewidth=0.8,
-                label=category,
+                label=method_name,
             )
+            for bar in bars:
+                ax.text(
+                    bar.get_x() + (bar.get_width() / 2.0),
+                    bar.get_height() + 1.2,
+                    f"{bar.get_height():.1f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
 
         ax.set_title(f"{load_name} Load Comparative Performance")
-        ax.set_xlabel("Methods")
-        ax.set_ylabel("Performance (%)")
-        ax.set_xticks(x_positions, methods)
+        ax.set_xlabel("Metrics")
+        ax.set_ylabel("Comparative Score (%)")
+        ax.set_xticks(x_positions, categories)
+        ax.set_ylim(0.0, 105.0)
         ax.grid(True, linestyle="--", alpha=0.35, axis="y")
         ax.legend()
         fig.tight_layout()
@@ -752,6 +807,7 @@ def save_results(
     execution_results: dict[str, list[ExperimentSummary]],
     rack_sweep,
     metric_summaries: dict[str, dict[int, ExperimentSummary]],
+    comparative_results: dict[str, list[ExperimentSummary]] | None = None,
     rack_profile_metrics: dict[str, dict[int, list[float]]] | None = None,
     dataset_size_execution_profiles: dict[str, dict[int, list[float]]] | None = None,
     dataset_sizes: np.ndarray | None = None,
@@ -773,6 +829,11 @@ def save_results(
             for category, summaries in metric_summaries.items()
         },
     }
+    if comparative_results is not None:
+        payload["comparative_performance_experiment"] = {
+            algorithm: [asdict(summary) for summary in summaries]
+            for algorithm, summaries in comparative_results.items()
+        }
     if rack_profile_metrics is not None:
         payload["rack_metric_profiles"] = rack_profile_metrics
     if dataset_size_execution_profiles is not None and dataset_sizes is not None:
@@ -820,6 +881,7 @@ def print_summary(
 def run_comprehensive_simulation() -> None:
     print("Running SI-CL-SDEO HDFS replication simulation...")
     execution_results = run_execution_time_experiment()
+    comparative_results = run_comparative_performance_experiment()
     dataset_sizes, dataset_size_execution_profiles = run_dataset_size_execution_profiles()
     racks_array, rack_profile_metrics = run_rack_profile_experiment()
     rack_sweep = (
@@ -835,11 +897,12 @@ def run_comprehensive_simulation() -> None:
     plot_replication_factor_metrics(racks_array, rack_profile_metrics)
     plot_individual_paper_style_figures(racks_array, rack_profile_metrics)
     plot_time_complexity(racks_array, rack_profile_metrics)
-    comparative_performance_scores = plot_comparative_performance_bars(execution_results)
+    comparative_performance_scores = plot_comparative_performance_bars(comparative_results)
     save_results(
         execution_results,
         rack_sweep,
         metric_summaries,
+        comparative_results=comparative_results,
         rack_profile_metrics=rack_profile_metrics,
         dataset_size_execution_profiles=dataset_size_execution_profiles,
         dataset_sizes=dataset_sizes,
